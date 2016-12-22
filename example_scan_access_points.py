@@ -20,7 +20,7 @@ are available by setting the NLCB environment variable to either 'verbose' or
     NLCB=debug example_scan_access_points.py -v wlan0
 
 Usage:
-    example_show_wifi_interface.py [-k COLUMN] [-n] [-r] [-v ...] <interface>
+    example_show_wifi_interface.py [-k COLUMN] [-j] [-q] [-n] [-r] [-v ...] <interface>
     example_show_wifi_interface.py -h | --help
 
 Options:
@@ -32,6 +32,8 @@ Options:
                         still have the results stored in memory.
     -r --reverse        Reverse the results.
     -v --verbose        Print debug messages to stderr. Specify twice for more.
+    -j --json           Print JSON formatted output
+    -q --quiet          Only print data, no other messages.
 """
 
 from __future__ import print_function
@@ -69,12 +71,17 @@ COLUMNS = ['SSID', 'Security', 'Channel', 'Frequency', 'Signal', 'BSSID']
 OPTIONS = docopt(__doc__) if __name__ == '__main__' else dict()
 
 
+def display(*args, **kwargs):
+    if not OPTIONS.get('--quiet'):
+        print(*args, **kwargs)
+
+
 def error(message, code=1):
     """Print an error message to stderr and exits with a status of 1 by default."""
     if message:
-        print('ERROR: {0}'.format(message), file=sys.stderr)
+        display('ERROR: {0}'.format(message), file=sys.stderr)
     else:
-        print(file=sys.stderr)
+        display(file=sys.stderr)
     sys.exit(code)
 
 
@@ -134,16 +141,16 @@ def callback_dump(msg, results):
     tb = dict((i, None) for i in range(nl80211.NL80211_ATTR_MAX + 1))
     nla_parse(tb, nl80211.NL80211_ATTR_MAX, genlmsg_attrdata(gnlh, 0), genlmsg_attrlen(gnlh, 0), None)
     if not tb[nl80211.NL80211_ATTR_BSS]:
-        print('WARNING: BSS info missing for an access point.')
+        display('WARNING: BSS info missing for an access point.')
         return libnl.handlers.NL_SKIP
     if nla_parse_nested(bss, nl80211.NL80211_BSS_MAX, tb[nl80211.NL80211_ATTR_BSS], bss_policy):
-        print('WARNING: Failed to parse nested attributes for an access point!')
+        display('WARNING: Failed to parse nested attributes for an access point!')
         return libnl.handlers.NL_SKIP
     if not bss[nl80211.NL80211_BSS_BSSID]:
-        print('WARNING: No BSSID detected for an access point!')
+        display('WARNING: No BSSID detected for an access point!')
         return libnl.handlers.NL_SKIP
     if not bss[nl80211.NL80211_BSS_INFORMATION_ELEMENTS]:
-        print('WARNING: No additional information available for an access point!')
+        display('WARNING: No additional information available for an access point!')
         return libnl.handlers.NL_SKIP
 
     # Further parse and then store. Overwrite existing data for BSSID if scan is run multiple times.
@@ -316,7 +323,7 @@ def print_table(data):
     table_data.sort(key=lambda c: c[sort_by_column], reverse=OPTIONS['--reverse'])
 
     table.table_data.extend(table_data)
-    print(table.table)
+    display(table.table)
 
 
 def main():
@@ -342,9 +349,9 @@ def main():
 
     # Scan for access points 1 or more (if requested) times.
     if not OPTIONS['--no-sudo']:
-        print('Scanning for access points, may take about 8 seconds...')
+        display('Scanning for access points, may take about 8 seconds...')
     else:
-        print("Attempting to read results of previous scan.")
+        display("Attempting to read results of previous scan.")
     results = dict()
     for i in range(2, -1, -1):  # Three tries on errors.
         if not OPTIONS['--no-sudo']:
@@ -360,18 +367,36 @@ def main():
             continue
         break
     if not results:
-        print('No access points detected.')
+        display('No access points detected.')
         return
 
     # Print results.
-    print('Found {0} access points:'.format(len(results)))
-    print_table(results.values())
+    display('Found {0} access points:'.format(len(results)))
+
+    if OPTIONS['--json']:
+        import json
+        import datetime
+
+        class DatetimeEncoder(json.JSONEncoder):
+            def default(self, obj):
+                if isinstance(obj, datetime.datetime):
+                    return obj.strftime('%Y-%m-%dT%H:%M:%SZ')
+                elif isinstance(obj, datetime.date):
+                    return obj.strftime('%Y-%m-%d')
+                elif isinstance(obj, datetime.timedelta):
+                    return str(obj)
+                # Let the base class default method raise the TypeError
+                return json.JSONEncoder.default(self, obj)
+
+        print(json.dumps(results, cls=DatetimeEncoder))
+    else:
+        print_table(results.values())
 
 
 def setup_logging():
     """Called when __name__ == '__main__' below. Sets up logging library.
 
-    All logging messages go to stderr, from DEBUG to CRITICAL. This script uses print() for regular messages.
+    All logging messages go to stderr, from DEBUG to CRITICAL. This script uses display() for regular messages.
     """
     fmt = 'DBG<0>%(pathname)s:%(lineno)d  %(funcName)s: %(message)s'
 
@@ -394,5 +419,5 @@ if __name__ == '__main__':
     if OPTIONS['--key'].lower() not in [c.lower() for c in COLUMNS]:
         error('Invalid column specified. Must be one of: {0}'.format(' '.join(COLUMNS)))
     if os.getuid() and not OPTIONS['--no-sudo']:
-        print('WARNING: Script should be run as root. Might get error -28.')
+        display('WARNING: Script should be run as root. Might get error -28.')
     main()
